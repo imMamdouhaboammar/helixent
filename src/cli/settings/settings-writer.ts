@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { appendToolToAllowList, settingsSchema } from "./settings";
@@ -12,6 +12,11 @@ export class SettingsWriter {
   }
 
   async appendAllowedTool(cwd: string, toolName: string): Promise<void> {
+    const cwdStat = await stat(cwd).catch(() => null);
+    if (!cwdStat?.isDirectory()) {
+      throw new Error(`Project cwd must exist and be a directory: ${cwd}`);
+    }
+
     const path = this.loader.projectLocalSettingsPath(cwd);
     const file = Bun.file(path);
     let base: Record<string, unknown> = {};
