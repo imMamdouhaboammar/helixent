@@ -87,4 +87,17 @@ describe("SettingsWriter", () => {
       permissions: { allow: ["bash"] },
     });
   });
+
+  test("appendAllowedTool creates the project settings directory when it is missing", async () => {
+    const freshProject = join(baseDir, "fresh-project");
+    await mkdir(freshProject, { recursive: true });
+
+    const loader = new SettingsLoader(helixHome);
+    const writer = new SettingsWriter(loader);
+    await writer.appendAllowedTool(freshProject, "bash");
+
+    const localPath = join(freshProject, ".helixent", "settings.local.json");
+    const raw = await Bun.file(localPath).text();
+    expect(JSON.parse(raw)).toMatchObject({ permissions: { allow: ["bash"] } });
+  });
 });
