@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -99,5 +99,14 @@ describe("SettingsWriter", () => {
     const localPath = join(freshProject, ".helixent", "settings.local.json");
     const raw = await Bun.file(localPath).text();
     expect(JSON.parse(raw)).toMatchObject({ permissions: { allow: ["bash"] } });
+  });
+
+  test("appendAllowedTool rejects a nonexistent project cwd without creating it", async () => {
+    const missingProject = join(baseDir, "missing-project");
+    const loader = new SettingsLoader(helixHome);
+    const writer = new SettingsWriter(loader);
+
+    await expect(writer.appendAllowedTool(missingProject, "bash")).rejects.toThrow("must exist and be a directory");
+    await expect(stat(missingProject)).rejects.toThrow();
   });
 });
