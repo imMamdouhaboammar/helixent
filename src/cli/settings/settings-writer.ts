@@ -1,3 +1,6 @@
+import { mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
+
 import { appendToolToAllowList, settingsSchema } from "./settings";
 import { SettingsLoader } from "./settings-loader";
 
@@ -29,6 +32,7 @@ export class SettingsWriter {
     }
     const merged = appendToolToAllowList(base, toolName);
     const out = JSON.stringify(merged, null, 2) + "\n";
+    await mkdir(dirname(path), { recursive: true });
     await Bun.write(path, out);
   }
 }
