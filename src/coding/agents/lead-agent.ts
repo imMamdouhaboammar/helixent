@@ -31,7 +31,7 @@ import { writeFileTool } from "../tools/write-file";
 export async function createCodingAgent({
   model,
   cwd = process.cwd(),
-  skillsDirs = [join(process.cwd(), ".agents/skills")],
+  skillsDirs,
   askUser,
   askUserQuestion,
   approvalPersistence,
@@ -62,8 +62,9 @@ export async function createCodingAgent({
   const { tool: todoTool, middleware: todoMiddleware } = createTodoSystem();
 
   const askUserQuestionTool = askUserQuestion ? createAskUserQuestionTool(askUserQuestion) : null;
+  const resolvedSkillsDirs = skillsDirs ?? [join(cwd, ".agents/skills")];
 
-  const middlewares = [createSkillsMiddleware(skillsDirs), todoMiddleware];
+  const middlewares = [createSkillsMiddleware(resolvedSkillsDirs), todoMiddleware];
   if (askUser) {
     middlewares.push(
       createCodingApprovalMiddleware({
