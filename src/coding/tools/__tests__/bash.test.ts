@@ -26,4 +26,19 @@ describe("bashTool", () => {
 
     expect(result).toMatch(/^Error: Command exit 42 failed with exit code 42:/);
   });
+
+  test.skipIf(!zshOnPath())(
+    "drains large stderr output without blocking the child process",
+    async () => {
+      const command = "repeat 30000 { print -u2 error }; exit 7";
+      const result = await bashTool.invoke({
+        description: "Exercise stderr pipe backpressure",
+        command,
+      });
+
+      expect(result).toStartWith(`Error: Command ${command} failed with exit code 7:`);
+      expect(result.length).toBeGreaterThan(100_000);
+    },
+    5_000,
+  );
 });
