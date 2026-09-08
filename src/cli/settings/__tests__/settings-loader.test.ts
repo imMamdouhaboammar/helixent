@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
@@ -24,25 +24,35 @@ afterEach(async () => {
 });
 
 describe("SettingsLoader", () => {
-  test("loadAllowList unions permissions.allow from user, project, and local files", async () => {
+  test("rejects a relative HELIXENT_HOME for trusted approval state", () => {
+    expect(() => new SettingsLoader(".helixent")).toThrow("HELIXENT_HOME must be absolute");
+  });
+
+  test("loadAllowList ignores repo-controlled grants and trusts user-owned project approvals", async () => {
     await writeFile(join(helixHome, "settings.json"), JSON.stringify({ permissions: { allow: ["bash"] } }), "utf8");
     await writeFile(
       join(projectDir, ".helixent", "settings.json"),
-      JSON.stringify({ permissions: { allow: ["read_file"] } }),
+      JSON.stringify({ permissions: { allow: ["write_file"] } }),
       "utf8",
     );
     await writeFile(
       join(projectDir, ".helixent", "settings.local.json"),
-      JSON.stringify({ permissions: { allow: ["write_file"] } }),
+      JSON.stringify({ permissions: { allow: ["str_replace"] } }),
       "utf8",
     );
 
     const loader = new SettingsLoader(helixHome);
+    const trustedProjectPath = await loader.projectLocalSettingsPath(projectDir);
+    expect(trustedProjectPath.startsWith(helixHome)).toBe(true);
+    expect(trustedProjectPath.startsWith(projectDir)).toBe(false);
+    await mkdir(dirname(trustedProjectPath), { recursive: true });
+    await writeFile(trustedProjectPath, JSON.stringify({ permissions: { allow: ["apply_patch"] } }), "utf8");
+
     const allowed = await loader.loadAllowList(projectDir);
-    expect([...allowed].sort()).toEqual(["bash", "read_file", "write_file"].sort());
+    expect([...allowed].sort()).toEqual(["apply_patch", "bash"].sort());
   });
 
-  test("ignores invalid user layer and still merges project and local", async () => {
+  test("ignores invalid user layer and does not trust project permission grants", async () => {
     await writeFile(join(helixHome, "settings.json"), "{ not valid json", "utf8");
     await writeFile(
       join(projectDir, ".helixent", "settings.json"),
@@ -52,10 +62,10 @@ describe("SettingsLoader", () => {
 
     const loader = new SettingsLoader(helixHome);
     const allowed = await loader.loadAllowList(projectDir);
-    expect([...allowed]).toEqual(["grep_search"]);
+    expect([...allowed]).toEqual([]);
   });
 
-  test("last layer wins for non-allow keys under permissions", async () => {
+  test("repo-local layers still merge non-allow settings", async () => {
     await writeFile(
       join(helixHome, "settings.json"),
       JSON.stringify({ permissions: { allow: ["a"], customKey: "fromUser" } }),
@@ -63,7 +73,7 @@ describe("SettingsLoader", () => {
     );
     await writeFile(
       join(projectDir, ".helixent", "settings.local.json"),
-      JSON.stringify({ permissions: { customKey: "fromLocal" } }),
+      JSON.stringify({ permissions: { allow: ["write_file"], customKey: "fromLocal" } }),
       "utf8",
     );
 
@@ -72,19 +82,57 @@ describe("SettingsLoader", () => {
     expect(merged.permissions?.allow?.sort()).toEqual(["a"]);
     expect((merged.permissions as Record<string, unknown>).customKey).toBe("fromLocal");
   });
+
+  test.skipIf(process.platform === "win32")("retargeting a project symlink does not transfer approvals", async () => {
+    const firstProject = join(baseDir, "first-project");
+    const secondProject = join(baseDir, "second-project");
+    const projectLink = join(baseDir, "project-link");
+    await mkdir(firstProject, { recursive: true });
+    await mkdir(secondProject, { recursive: true });
+    await symlink(firstProject, projectLink);
+
+    const loader = new SettingsLoader(helixHome);
+    const writer = new SettingsWriter(loader);
+    await writer.appendAllowedTool(projectLink, "bash");
+    expect(await loader.loadAllowList(projectLink)).toEqual(new Set(["bash"]));
+
+    await rm(projectLink, { force: true });
+    await symlink(secondProject, projectLink);
+
+    expect(await loader.loadAllowList(projectLink)).toEqual(new Set());
+  });
 });
 
 describe("SettingsWriter", () => {
-  test("appendAllowedTool writes only to project settings.local.json", async () => {
+  test("appendAllowedTool writes project approval state under HELIXENT_HOME", async () => {
     const loader = new SettingsLoader(helixHome);
     const writer = new SettingsWriter(loader);
     await writer.appendAllowedTool(projectDir, "bash");
 
-    const localPath = join(projectDir, ".helixent", "settings.local.json");
-    const raw = await Bun.file(localPath).text();
-    const parsed: unknown = JSON.parse(raw);
-    expect(parsed).toMatchObject({
-      permissions: { allow: ["bash"] },
-    });
+    const trustedPath = await loader.projectLocalSettingsPath(projectDir);
+    expect(trustedPath.startsWith(helixHome)).toBe(true);
+    expect(trustedPath.startsWith(projectDir)).toBe(false);
+    const raw = await Bun.file(trustedPath).text();
+    expect(JSON.parse(raw)).toMatchObject({ permissions: { allow: ["bash"] } });
+
+    const repoLocalPath = join(projectDir, ".helixent", "settings.local.json");
+    expect(await Bun.file(repoLocalPath).exists()).toBe(false);
+
+    if (process.platform !== "win32") {
+      const projectApprovalDir = dirname(trustedPath);
+      const projectsDir = dirname(projectApprovalDir);
+      expect((await stat(projectsDir)).mode & 0o777).toBe(0o700);
+      expect((await stat(projectApprovalDir)).mode & 0o777).toBe(0o700);
+      expect((await stat(trustedPath)).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  test("appendAllowedTool rejects a nonexistent project cwd without creating it", async () => {
+    const missingProject = join(baseDir, "missing-project");
+    const loader = new SettingsLoader(helixHome);
+    const writer = new SettingsWriter(loader);
+
+    await expect(writer.appendAllowedTool(missingProject, "bash")).rejects.toThrow("must exist and be a directory");
+    await expect(stat(missingProject)).rejects.toThrow();
   });
 });
