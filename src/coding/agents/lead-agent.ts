@@ -70,6 +70,7 @@ export async function createCodingAgent({
       createCodingApprovalMiddleware({
         cwd,
         requiresApproval: CODING_TOOLS_REQUIRING_APPROVAL,
+        trustedReadRoots: skillsDirs,
         askUser,
         approvalPersistence,
       }),
