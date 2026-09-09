@@ -121,6 +121,7 @@ export function formatToolResultForMessage({ toolName, result }: { toolName: str
         error: truncateSummary(normalized.error),
         ...(normalized.code ? { code: normalized.code } : {}),
       },
+      toolName,
     );
   }
 
@@ -139,6 +140,7 @@ export function formatToolResultForMessage({ toolName, result }: { toolName: str
       ok: true,
       summary: truncateSummary(normalized.summary),
     },
+    toolName,
   );
 }
 
@@ -156,25 +158,42 @@ function stringifyValue(value: unknown) {
   return String(value);
 }
 
-function stringifyWithinLimit(payload: StructuredToolResult, maxLength: number | undefined, fallback: StructuredToolResult): string {
-  const serialized = JSON.stringify(payload);
-  if (!maxLength || serialized.length <= maxLength) {
-    return serialized;
+function safeJsonStringify(value: unknown): { serialized: string | null; failed: boolean } {
+  try {
+    return { serialized: JSON.stringify(value), failed: false };
+  } catch {
+    return { serialized: null, failed: true };
+  }
+}
+
+function stringifyWithinLimit(
+  payload: StructuredToolResult,
+  maxLength: number | undefined,
+  fallback: StructuredToolResult,
+  toolName: string,
+): string {
+  const primary = safeJsonStringify(payload);
+  if (primary.serialized !== null && (!maxLength || primary.serialized.length <= maxLength)) {
+    return primary.serialized;
   }
 
-  const fallbackSerialized = JSON.stringify(fallback);
-  if (!maxLength || fallbackSerialized.length <= maxLength) {
-    return fallbackSerialized;
+  if (primary.failed) {
+    console.warn(`[helixent] Tool ${toolName} returned data that could not be JSON-serialized; using summary-only output.`);
+  }
+
+  const fallbackResult = safeJsonStringify(fallback);
+  if (fallbackResult.serialized !== null && (!maxLength || fallbackResult.serialized.length <= maxLength)) {
+    return fallbackResult.serialized;
   }
 
   if (fallback.ok) {
-    return JSON.stringify({ ok: true, summary: fallback.summary.slice(0, Math.max(0, maxLength - 32)) } satisfies StructuredToolResult);
+    return JSON.stringify({ ok: true, summary: fallback.summary.slice(0, Math.max(0, (maxLength ?? 4000) - 32)) } satisfies StructuredToolResult);
   }
 
   return JSON.stringify({
     ok: false,
-    summary: fallback.summary.slice(0, Math.max(0, maxLength - 64)),
-    error: fallback.error.slice(0, Math.max(0, maxLength - 64)),
+    summary: fallback.summary.slice(0, Math.max(0, (maxLength ?? 4000) - 64)),
+    error: fallback.error.slice(0, Math.max(0, (maxLength ?? 4000) - 64)),
     ...(fallback.code ? { code: fallback.code } : {}),
   } satisfies StructuredToolResult);
 }
