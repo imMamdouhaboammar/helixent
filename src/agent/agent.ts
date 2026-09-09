@@ -170,11 +170,11 @@ export class Agent {
       throw new Error("Agent is already streaming");
     }
 
-    this._abortController = new AbortController();
-    this._appendMessage(message);
-    await this._beforeAgentRun();
     this._streaming = true;
     try {
+      this._abortController = new AbortController();
+      this._appendMessage(message);
+      await this._beforeAgentRun();
       for (let step = 1; step <= this.options.maxSteps; step++) {
         this._abortController.signal.throwIfAborted();
         await this._beforeAgentStep(step);
@@ -253,7 +253,9 @@ export class Agent {
       try {
         const tool = this.tools?.find((t) => t.name === toolUse.name);
         if (!tool) throw new Error(`Tool ${toolUse.name} not found`);
+        signal?.throwIfAborted();
         const beforeResult = await this._beforeToolUse(toolUse);
+        signal?.throwIfAborted();
         if (beforeResult.skip) {
           return { index, toolUseId: toolUse.id, toolName: toolUse.name, result: beforeResult.result };
         }
