@@ -8,6 +8,18 @@ import type {
   OpenAIChatCompletionMessageParam,
 } from "./types";
 
+function parseToolInput(argumentsText: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(argumentsText);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Keep malformed model output inside the normal tool-validation/error path.
+  }
+  return {};
+}
+
 /**
  * Converts the messages to OpenAI ChatCompletionMessageParam messages.
  * @param messages - The messages to convert.
@@ -23,10 +35,12 @@ export function convertToOpenAIMessages(messages: Message[]): OpenAIChatCompleti
         role: "assistant",
         content: [],
       };
-      assistantMessage.reasoning_content = "";
       for (const content of message.content) {
         if (content.type === "thinking") {
-          assistantMessage.reasoning_content = content.thinking;
+          if (content.thinking.length === 0) continue;
+          assistantMessage.reasoning_content = assistantMessage.reasoning_content
+            ? `${assistantMessage.reasoning_content}\n${content.thinking}`
+            : content.thinking;
         } else if (content.type === "tool_use") {
           if (!assistantMessage.tool_calls) {
             assistantMessage.tool_calls = [];
@@ -39,7 +53,7 @@ export function convertToOpenAIMessages(messages: Message[]): OpenAIChatCompleti
               arguments: JSON.stringify(content.input),
             },
           });
-        } else {
+        } else if (content.text.length > 0) {
           (assistantMessage.content as ChatCompletionContentPart[]).push(content);
         }
       }
@@ -73,7 +87,7 @@ export function parseAssistantMessage(message: OpenAIChatCompletionMessage, usag
     content: [],
     usage,
   };
-  if (typeof message.reasoning_content === "string") {
+  if (typeof message.reasoning_content === "string" && message.reasoning_content.length > 0) {
     result.content.push({ type: "thinking", thinking: message.reasoning_content });
   }
   if (typeof message.content === "string") {
@@ -86,7 +100,7 @@ export function parseAssistantMessage(message: OpenAIChatCompletionMessage, usag
           type: "tool_use",
           id: tool_call.id,
           name: tool_call.function.name,
-          input: JSON.parse(tool_call.function.arguments),
+          input: parseToolInput(tool_call.function.arguments),
         });
       }
     }
