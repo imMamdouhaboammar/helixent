@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import type { AgentMiddleware } from "../agent-middleware";
 
+import { warnInvalidSkill } from "./skill-errors";
 import { readSkillFrontMatter } from "./skill-reader";
 import type { SkillFrontmatter } from "./types";
 
@@ -15,6 +16,7 @@ import type { SkillFrontmatter } from "./types";
  * - Each `skillsDir` is expected to contain subfolders, each representing one skill.
  * - A skill is discovered when `<skillsDir>/<folder>/SKILL.md` exists.
  * - `~` is expanded to the current user's home directory.
+ * - Invalid skill frontmatter is skipped with a warning instead of aborting the agent run.
  *
  * ## Duplicate handling (important)
  * - **There is no "same-name skill overrides another" behavior.**
@@ -57,8 +59,12 @@ export function createSkillsMiddleware(skillsDirs: string[] = [join(process.cwd(
           if (!(await exists(skillFilePath))) continue;
 
           seenSkillFiles.add(skillFilePath);
-          const frontmatter = await readSkillFrontMatter(skillFilePath);
-          skills.push(frontmatter);
+          try {
+            const frontmatter = await readSkillFrontMatter(skillFilePath);
+            skills.push(frontmatter);
+          } catch (error) {
+            warnInvalidSkill(skillFilePath, error);
+          }
         }
       }
 

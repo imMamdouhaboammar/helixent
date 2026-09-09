@@ -3,6 +3,7 @@ import fs, { exists } from "node:fs/promises";
 import os from "node:os";
 import { join } from "node:path";
 
+import { warnInvalidSkill } from "./skill-errors";
 import { readSkillFrontMatter } from "./skill-reader";
 import type { SkillFrontmatter } from "./types";
 
@@ -32,8 +33,12 @@ export async function listSkills(
       if (!(await exists(skillFilePath))) continue;
 
       seenSkillFiles.add(skillFilePath);
-      const frontmatter = await readSkillFrontMatter(skillFilePath);
-      skills.push(frontmatter);
+      try {
+        const frontmatter = await readSkillFrontMatter(skillFilePath);
+        skills.push(frontmatter);
+      } catch (error) {
+        warnInvalidSkill(skillFilePath, error);
+      }
     }
   }
 
