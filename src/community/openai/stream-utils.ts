@@ -20,8 +20,11 @@ export class StreamAccumulator {
   private textContent = "";
   private toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
   private usage: TokenUsage | undefined;
+  private finished = false;
+  private seenChunk = false;
 
   push(chunk: OpenAIChatCompletionChunk): void {
+    this.seenChunk = true;
     const delta = chunk.choices[0]?.delta;
 
     if (delta) {
@@ -51,10 +54,23 @@ export class StreamAccumulator {
       }
     }
 
-    // Usage arrives on the final chunk (choices is empty)
+    // Usage is optional metadata. When present it arrives on the final OpenAI
+    // chunk, so preserve the existing behavior of treating that snapshot as final.
     if (chunk.usage) {
       this.usage = toTokenUsage(chunk.usage);
+      this.finished = true;
     }
+  }
+
+  /**
+   * Marks the accumulator complete when the provider iterator ends without an
+   * OpenAI usage chunk. Returns true when this call changed the final state.
+   * Empty iterators remain empty so downstream no-message safeguards still fire.
+   */
+  finish(): boolean {
+    if (!this.seenChunk || this.finished) return false;
+    this.finished = true;
+    return true;
   }
 
   snapshot(): AssistantMessage {
@@ -69,7 +85,6 @@ export class StreamAccumulator {
 
     // Sort by index to preserve order
     const sorted = [...this.toolCalls.entries()].sort((a, b) => a[0] - b[0]);
-    const isFinal = this.usage !== undefined;
     for (const [, tc] of sorted) {
       let input: Record<string, unknown> = {};
       let parsed = false;
@@ -79,12 +94,11 @@ export class StreamAccumulator {
       } catch {
         // arguments JSON is still streaming — fall through
       }
-      // During streaming (non-final snapshots) we intentionally withhold
-      // a tool_use entry until its arguments parse successfully, so
-      // downstream consumers (e.g. agent progress events) never observe
-      // a half-formed payload. On the final snapshot we fall back to the
-      // best-effort empty object to preserve the previous contract.
-      if (!parsed && !isFinal) continue;
+      // During streaming snapshots we intentionally withhold a tool_use entry
+      // until its arguments parse successfully, so downstream consumers never
+      // observe a half-formed payload. Once the iterator is finished, retain the
+      // previous best-effort fallback to an empty input object.
+      if (!parsed && !this.finished) continue;
       content.push({ type: "tool_use", id: tc.id, name: tc.name, input });
     }
 
@@ -92,7 +106,7 @@ export class StreamAccumulator {
       role: "assistant",
       content,
       usage: this.usage,
-      ...(this.usage ? {} : { streaming: true }),
+      ...(this.finished ? {} : { streaming: true }),
     };
   }
 }
