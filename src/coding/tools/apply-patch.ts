@@ -128,13 +128,37 @@ function validateHunkCounts(hunk: PatchHunk, filePath: string) {
 }
 
 function applyHunks(original: string, file: PatchFile) {
-  const sourceLines = original === "" ? [] : original.replace(/\r\n/g, "\n").split("\n");
+  const normalizedOriginal = original.replace(/\r\n/g, "\n");
+  const sourceLines = original === "" ? [] : normalizedOriginal.split("\n");
+  const logicalLineCount =
+    normalizedOriginal.endsWith("\n") && sourceLines.length > 0 ? sourceLines.length - 1 : sourceLines.length;
   const output: string[] = [];
   let sourceIndex = 0;
 
   for (const hunk of file.hunks) {
     validateHunkCounts(hunk, file.newPath);
-    const expectedIndex = hunk.oldStart - 1;
+
+    if (hunk.oldCount === 0) {
+      if (hunk.oldStart > logicalLineCount) {
+        throw new Error(
+          `Hunk start ${hunk.oldStart} is beyond the end of ${file.newPath} (${logicalLineCount} source lines).`,
+        );
+      }
+    } else {
+      const lastConsumedLine = hunk.oldStart + hunk.oldCount - 1;
+      if (hunk.oldStart < 1 || lastConsumedLine > logicalLineCount) {
+        throw new Error(
+          `Hunk range ${hunk.oldStart}-${lastConsumedLine} is beyond the end of ${file.newPath} (${logicalLineCount} source lines).`,
+        );
+      }
+    }
+
+    const expectedIndex = hunk.oldCount === 0 ? hunk.oldStart : hunk.oldStart - 1;
+    if (expectedIndex < sourceIndex) {
+      throw new Error(
+        `Patch hunks are overlapping or out of order in ${file.newPath}: hunk starts at line ${hunk.oldStart} after the source cursor advanced to line ${sourceIndex + 1}.`,
+      );
+    }
 
     while (sourceIndex < expectedIndex) {
       output.push(sourceLines[sourceIndex] ?? "");
@@ -187,6 +211,7 @@ export const applyPatchTool = defineTool({
     try {
       const files = parsePatch(patch);
       const changedFiles: string[] = [];
+      const pendingUpdates = new Map<string, string>();
 
       for (const file of files) {
         if (!file.newPath.startsWith("/")) {
@@ -207,17 +232,23 @@ export const applyPatchTool = defineTool({
           );
         }
 
-        const target = Bun.file(file.newPath);
-        const original = (await target.exists()) ? await target.text() : "";
-        const updated = applyHunks(original, file);
-        const parent = dirname(file.newPath);
+        let original = pendingUpdates.get(file.newPath);
+        if (original === undefined) {
+          const target = Bun.file(file.newPath);
+          original = (await target.exists()) ? await target.text() : "";
+        }
 
+        const updated = applyHunks(original, file);
+        pendingUpdates.set(file.newPath, updated);
+        changedFiles.push(file.newPath);
+      }
+
+      for (const [filePath, updated] of pendingUpdates) {
+        const parent = dirname(filePath);
         if (!(await exists(parent))) {
           await mkdir(parent, { recursive: true });
         }
-
-        await target.write(updated);
-        changedFiles.push(file.newPath);
+        await Bun.file(filePath).write(updated);
       }
 
       return okToolResult(`Applied patch to ${changedFiles.length} file(s).`, {

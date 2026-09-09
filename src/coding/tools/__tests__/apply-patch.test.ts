@@ -43,6 +43,44 @@ describe("applyPatchTool", () => {
     expect(await readFile(filePath, "utf8")).toBe("alpha\ngamma\n");
   });
 
+  test("places zero-length insertion hunks after oldStart", async () => {
+    const filePath = join(tempDir, "demo.txt");
+    await writeFile(filePath, "alpha\nbeta\n");
+
+    const patch = [
+      `--- ${filePath}`,
+      `+++ ${filePath}`,
+      "@@ -1,0 +2,1 @@",
+      "+inserted",
+      "",
+    ].join("\n");
+
+    const result = await applyPatchTool.invoke({ description: "Insert a line after alpha", patch });
+    expect(result).toMatchObject({ ok: true });
+    expect(await readFile(filePath, "utf8")).toBe("alpha\ninserted\nbeta\n");
+  });
+
+  test("rejects insertion past logical EOF in newline-terminated files", async () => {
+    const filePath = join(tempDir, "demo.txt");
+    const original = "alpha\nbeta\n";
+    await writeFile(filePath, original);
+
+    const patch = [
+      `--- ${filePath}`,
+      `+++ ${filePath}`,
+      "@@ -3,0 +4,1 @@",
+      "+too-late",
+      "",
+    ].join("\n");
+
+    const result = await applyPatchTool.invoke({ description: "Reject insertion past EOF", patch });
+    expect(result).toMatchObject({ ok: false, code: "PATCH_APPLY_FAILED" });
+    if (!result.ok) {
+      expect(result.error).toContain("beyond the end");
+    }
+    expect(await readFile(filePath, "utf8")).toBe(original);
+  });
+
   test("rejects file deletion patches", async () => {
     const filePath = join(tempDir, "demo.txt");
     const patch = [
@@ -82,5 +120,60 @@ describe("applyPatchTool", () => {
     if (!result.ok) {
       expect(result.error).toContain("Hunk count mismatch");
     }
+  });
+
+  test("rejects out-of-order hunks instead of applying them at the current cursor", async () => {
+    const filePath = join(tempDir, "demo.txt");
+    const original = "alpha\nbeta\ngamma\n";
+    await writeFile(filePath, original);
+
+    const patch = [
+      `--- ${filePath}`,
+      `+++ ${filePath}`,
+      "@@ -2,1 +2,1 @@",
+      "-beta",
+      "+BETA",
+      "@@ -1,0 +2,1 @@",
+      "+late-insertion",
+      "",
+    ].join("\n");
+
+    const result = await applyPatchTool.invoke({ description: "Reject invalid hunk order", patch });
+    expect(result).toMatchObject({
+      ok: false,
+      code: "PATCH_APPLY_FAILED",
+    });
+    if (!result.ok) {
+      expect(result.error).toContain("out of order");
+    }
+    expect(await readFile(filePath, "utf8")).toBe(original);
+  });
+
+  test("validates every file before writing any multi-file changes", async () => {
+    const firstPath = join(tempDir, "first.txt");
+    const secondPath = join(tempDir, "second.txt");
+    const firstOriginal = "alpha\n";
+    const secondOriginal = "beta\n";
+    await writeFile(firstPath, firstOriginal);
+    await writeFile(secondPath, secondOriginal);
+
+    const patch = [
+      `--- ${firstPath}`,
+      `+++ ${firstPath}`,
+      "@@ -1,1 +1,1 @@",
+      "-alpha",
+      "+ALPHA",
+      `--- ${secondPath}`,
+      `+++ ${secondPath}`,
+      "@@ -1,1 +1,1 @@",
+      "-not-beta",
+      "+BETA",
+      "",
+    ].join("\n");
+
+    const result = await applyPatchTool.invoke({ description: "Reject invalid multi-file patch", patch });
+    expect(result).toMatchObject({ ok: false, code: "PATCH_APPLY_FAILED" });
+    expect(await readFile(firstPath, "utf8")).toBe(firstOriginal);
+    expect(await readFile(secondPath, "utf8")).toBe(secondOriginal);
   });
 });
